@@ -1,66 +1,22 @@
-#!/bin/bash
+#include <stdio.h>
+#include <stdlib.h>
+#include <getopt.h>
+#include <unistd.h>
+#include <string.h>
+#include <dirent.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <errno.h>
 
-print_users(){
-    cut -d: -f1,6 /etc/passwd | sort
+
+#define MAX_PATH_LEN 256
+
+static void usage(const char *progname) {
+    fprintf(stderr, "Usage: %s [-u|-p|-h][-l|-e <path>]\n", progname);
+    fprintf(stderr, "Options:\n");
+    fprintf(stderr, "  -u, --users    List users and their home directories\n");
+    fprintf(stderr, "  -p, --processes  List running processes\n");
+    fprintf(stderr, "  -h, --help     Show this usage message\n");
+    fprintf(stderr, "  -l <path>, --log <path>   Redirect output to the specified path\n");
+    fprintf(stderr, "  -e <path>, --errors <path> Redirect error output (stderr) to the specified path\n");
 }
-
-print_processes() {
-    ps -e --sort=pid
-}
-
-print_help() {
-    echo "Usage: $0[OPTIONS] Options:
-  -u, --users            List users and their home directories, sorted alphabetically.
-  -p, --processes        List running processes, sorted by their PID.
-  -h, --help             Display this help message and exit.
-  -l, --log PATH         Write output to the specified file instead of stdout.
-  -e, --errors PATH      Write errors to the specified file instead of stderr."
-}
-
-OPTS=$(getopt -o uphl:e: --long users, processes, help, log:, errors: -n 'parse-options' -- "$@")
-if [$? !=0]; then
-    echo "Failed to parse options.">&2
-    exit 1
-fi 
-
-eval set -- "$OPTS"
-
-LOG_FILE=""
-ERROR_FILE=""
-
-while true; do
-    case"$1" in 
-        -u | --users ) ACTION="users"; shift ;;
-        -p | --processes ) ACTION="processes"; shift ;;
-        -h | --help ) ACTION="help"; shift ;;
-        -l | --log ) LOG_FILE="$2"; shift 2 ;;
-        -e | --errors ) ERROR_FILE="$2"; shift 2 ;;
-        -- ) shift; break ;;
-        * ) break ;;
-    esac
-done
-
-if [[ -n "$LOG_FILE" && ! -w $(dirname "$LOG_FILE") ]]; then
-    echo "Log path is not writable: $LOG_FILE" >&2
-    exit 1
-fi
-
-if [[ -n "$ERROR_FILE" && ! -w $(dirname "$ERROR_FILE") ]]; then
-    echo "Error log path is not writable: $ERROR_FILE" >&2
-    exit 1
-fi
-
-if [[-n "LOG_FILE"]]; then
-    exec> "LOG_FILE"
-fi
-
-if [[-n "ERROR_FILE"]]; then
-    exec 2> "ERROR_FILE"
-fi
-
-case "$ACTION" in
-    "users") print_users ;;
-  "processes") print_processes ;;
-  "help") print_help ;;
-  *) echo "Invalid action. Use -h or --help for usage information." >&2; exit 1 ;;
-esac
