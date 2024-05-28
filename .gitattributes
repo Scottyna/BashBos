@@ -1,164 +1,74 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <getopt.h>
-#include <unistd.h>
-#include <string.h>
-#include <dirent.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <errno.h>
+#!/bin/bash
 
-#define MAX_PATH_LEN 256
-
-static void usage(const char *progname) {
-    fprintf(stderr, "Usage: %s [-u|-p|-h][-l|-e <path>]\n", progname);
-    fprintf(stderr, "Options:\n");
-    fprintf(stderr, "  -u, --users    List users and their home directories\n");
-    fprintf(stderr, "  -p, --processes  List running processes\n");
-    fprintf(stderr, "  -h, --help     Show this usage message\n");
-    fprintf(stderr, "  -l <path>, --log <path>   Redirect output to the specified path\n");
-    fprintf(stderr, "  -e <path>, --errors <path> Redirect error output (stderr) to the specified path\n");
+# Объявление функций для каждой операции
+print_users() {
+  cut -d: -f1,6 /etc/passwd | sort
 }
 
-static int list_users(FILE *output) {
-    struct dirent *dp;
-    DIR *dirp = opendir("/etc/passwd");
-    if (!dirp) {
-        perror("opendir");
-        return 1;
-    }
-    while ((dp = readdir(dirp)) != NULL) {
-        if (dp->d_name[0] != '.') {
-            char path[MAX_PATH_LEN];
-            snprintf(path, sizeof(path), "/etc/passwd/%s", dp->d_name);
-
-            FILE *f = fopen(path, "r");
-            if (!f) {
-                perror("fopen");
-                closedir(dirp);
-                return 1;
-            }
-
-            char line[MAX_PATH_LEN];
-            char username[MAX_PATH_LEN];
-            char homedir[MAX_PATH_LEN];
-
-            while (fgets(line, sizeof(line), f) != NULL) {
-                if (sscanf(line, "%s:%*s:%*d:%*d:%*s:%s", username, homedir) == 2) {
-                    fprintf(output, "%s: %s\n", username, homedir);
-                }
-            }
-
-            fclose(f);
-        }
-    }
-
-    closedir(dirp);
-    return 0;
+print_processes() {
+  ps -e --sort=pid
 }
 
-static int list_processes(FILE *output) {
-    char cmd[] = "ps -e -o pid,cmd";
-
-    FILE *pipe = popen(cmd, "r");
-    if (!pipe) {
-        perror("popen");
-        return 1;
-    }
-
-    char line[MAX_PATH_LEN];
-    int pid;
-    char command[MAX_PATH_LEN];
-
-    while (fgets(line, sizeof(line), pipe) != NULL) {
-        if (sscanf(line, "%d %s", &pid, command) == 2) {
-            fprintf(output, "%d: %s\n", pid, command);
-        }
-    }
-
-    pclose(pipe);
-    return 0;
+print_help() {
+  echo "Usage: $0 [OPTIONS]
+Options:
+  -u, --users            List users and their home directories, sorted alphabetically.
+  -p, --processes        List running processes, sorted by their PID.
+  -h, --help             Display this help message and exit.
+  -l, --log PATH         Write output to the specified file instead of stdout.
+  -e, --errors PATH      Write errors to the specified file instead of stderr."
 }
 
-static int redirect_output(const char *path) {
-    FILE *f = fopen(path, "w");
-    if (!f) {
-        perror("fopen");
-        return 1;
-    }
+# Обработка аргументов командной строки
+OPTS=$(getopt -o uphl:e: --long users,processes,help,log:,errors: -n 'parse-options' -- "$@")
+if [ $? != 0 ]; then
+  echo "Failed to parse options." >&2
+  exit 1
+fi
 
-    int ret = dup2(fileno(f), STDOUT_FILENO);
-    if (ret < 0) {
-        perror("dup2");
-        fclose(f);
-        return 1;
-    }
+eval set -- "$OPTS"
 
-    return 0;
-}
+# Переменные для хранения путей файлов логов и ошибок
+LOG_FILE=""
+ERROR_FILE=""
 
-static int redirect_errors(const char *path) {
-    FILE *f = fopen(path, "w");
-    if (!f) {
-        perror("fopen");
-        return 1;
-    }
+# Разбор аргументов командной строки
+while true; do
+  case "$1" in
+    -u | --users ) ACTION="users"; shift ;;
+    -p | --processes ) ACTION="processes"; shift ;;
+    -h | --help ) ACTION="help"; shift ;;
+    -l | --log ) LOG_FILE="$2"; shift 2 ;;
+    -e | --errors ) ERROR_FILE="$2"; shift 2 ;;
+    -- ) shift; break ;;
+    * ) break ;;
+  esac
+done
 
-    int ret = dup2(fileno(f), STDERR_FILENO);
-    if (ret < 0) {
-        perror("dup2");
-        fclose(f);
-        return 1;
-    }
+# Проверка доступности пути к лог-файлам
+if [[ -n "$LOG_FILE" && ! -w $(dirname "$LOG_FILE") ]]; then
+  echo "Log path is not writable: $LOG_FILE" >&2
+  exit 1
+fi
 
-    return 0;
-}
+if [[ -n "$ERROR_FILE" && ! -w $(dirname "$ERROR_FILE") ]]; then
+  echo "Error log path is not writable: $ERROR_FILE" >&2
+  exit 1
+fi
 
-int main(int argc, char *argv) {
-    const char *short_options = "uphle:";
-    const struct option long_options[] = {
-        {"users", no_argument, NULL, 'u'},
-        {"processes", no_argument, NULL, 'p'},
-        {"help", no_argument, NULL, 'h'},
-        {"log", required_argument, NULL, 'l'},
-        {"errors", required_argument, NULL, 'e'},
-        {NULL, 0, NULL, 0}
-    };
+# Перенаправление stdout и stderr в файлы, если указаны
+if [[ -n "$LOG_FILE" ]]; then
+  exec > "$LOG_FILE"
+fi
 
-    FILE *output = stdout;
-    FILE *errors = stderr;
+if [[ -n "$ERROR_FILE" ]]; then
+  exec 2> "$ERROR_FILE"
+fi
 
-    int c;
-    optind = 1;
-    while ((c = getopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
-        switch (c) {
-            case 'u':
-                list_users(output);
-                break;
-            case 'p':
-                list_processes(output);
-                break;
-            case 'h':
-                usage(argv[0]);
-                return 0;
-            case 'l':
-                if (redirect_output(optarg) != 0)
-{
-                    fprintf(stderr, "Error redirecting output to %s\n", optarg);
-                    return 1;
-                }
-                break;
-            case 'e':
-                if (redirect_errors(optarg) != 0) {
-                    fprintf(stderr, "Error redirecting errors to %s\n", optarg);
-                    return 1;
-                }
-                break;
-            default:
-                usage(argv[0]);
-                return 1;
-        }
-    }
-
-    return 0;
-}
+# Выполнение выбранного действия
+case "$ACTION" in
+  "users") print_users ;;
+  "processes") print_processes ;;
+  "help") print_help ;;
+  *) echo "Invalid action. Use -h or --help for usage information." >&2; exit 1 ;;
+esac
